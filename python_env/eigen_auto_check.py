@@ -5,7 +5,7 @@ Checker for detecting dangerous auto usage with Eigen expression templates.
 This script uses libclang to parse C++ code and find auto declarations that may
 capture Eigen expression templates instead of materialized results.
 
-Usage:
+Usage with contained uv environment:
     uv run eigen_auto_check.py <source_file> [build_dir]
 
 Example:
@@ -22,32 +22,96 @@ import clang.cindex
 VERBOSE = False
 
 
-def is_allowed_auto_type(canonical_type_name: str) -> bool:
+def strip_reference(type_obj: clang.cindex.Type) -> clang.cindex.Type:
+    """
+    Strip reference wrappers from a type.
+    Similar to std::remove_reference in C++.
+
+    Args:
+        type_obj: The Type object to strip
+
+    Returns:
+        The type after stripping references
+    """
+    stripped = type_obj
+
+    # For reference types, get the pointee (the type being referenced)
+    if (
+        stripped.kind == clang.cindex.TypeKind.LVALUEREFERENCE
+        or stripped.kind == clang.cindex.TypeKind.RVALUEREFERENCE
+    ):
+        stripped = stripped.get_pointee()
+
+    return stripped
+
+
+def get_unqualified_type_name(type_obj: clang.cindex.Type) -> str:
+    """
+    Get the type name with references and const qualifiers removed.
+    Similar to std::remove_cvref in C++.
+
+    Args:
+        type_obj: The Type object
+
+    Returns:
+        The spelling of the type without const and references
+    """
+    stripped = strip_reference(type_obj)
+    type_spelling = stripped.spelling
+
+    # Remove 'const ' prefix if present
+    return type_spelling.removeprefix("const ")
+
+
+def is_in_eigen_namespace(type_obj: clang.cindex.Type) -> bool:
+    """
+    Check if a type is declared within the Eigen namespace.
+
+    Args:
+        type_obj: The Type object to check
+
+    Returns:
+        True if the type is in the Eigen namespace, False otherwise
+    """
+    stripped_type = strip_reference(type_obj)
+    decl = stripped_type.get_declaration()
+    if not decl or decl.kind == clang.cindex.CursorKind.NO_DECL_FOUND:
+        return False
+
+    # Walk up the semantic parent chain looking for a namespace named "Eigen"
+    parent = decl.semantic_parent
+    while parent:
+        if (
+            parent.kind == clang.cindex.CursorKind.NAMESPACE
+            and parent.spelling == "Eigen"
+        ):
+            return True
+        if parent.kind == clang.cindex.CursorKind.TRANSLATION_UNIT:
+            break
+        parent = parent.semantic_parent
+
+    return False
+
+
+def is_allowed_auto_type(canonical_type: clang.cindex.Type) -> bool:
     """
     Check if a canonical type is explicitly allowed to be used with auto.
 
     Args:
-        canonical_type_name: The canonical type name from type.get_canonical().spelling
-                            Should be fully qualified like "Eigen::Matrix<double, -1, -1>"
+        canonical_type: The canonical Type object from type.get_canonical()
 
     Returns:
         True if the type is a plain storage type (safe), False otherwise
     """
-    # Remove leading 'const ' if present
-    type_to_check = canonical_type_name.removeprefix("const ")
-
-    # Remove trailing ' &' or ' *' if present
-    type_to_check = type_to_check.rstrip("&* ")
+    type_spelling = get_unqualified_type_name(canonical_type)
 
     if VERBOSE:
-        print(
-            f"[DEBUG] Checking allowlist for canonical type: '{canonical_type_name}' -> '{type_to_check}'"
-        )
+        print(f"[DEBUG] Checking allowlist for type: '{type_spelling}'")
 
     # Allowlist: Only Eigen::Matrix and Eigen::Array are plain storage types
     # All other Eigen types (Product, CwiseBinaryOp, Transpose, etc.) are expression templates
 
-    if type_to_check.startswith("Eigen::Matrix<") or type_to_check.startswith(
+    if type_spelling.startswith("Eigen::Matrix<") or type_spelling.startswith(
         "Eigen::Array<"
     ):
         if VERBOSE:
@@ -130,12 +194,12 @@ def analyze_var_decl(cursor, filename: str, source_lines: list) -> list:
             f"[DEBUG] Variable '{cursor.spelling}': type='{type_name}', canonical='{canonical_name}'"
         )
 
-    # Only check Eigen types (canonical types always start with Eigen::)
-    if not canonical_name.startswith("Eigen::"):
+    # Only check Eigen types
+    if not is_in_eigen_namespace(canonical_type):
         return issues
 
     # Check if the canonical type is on the allowlist
-    is_allowed = is_allowed_auto_type(canonical_name)
+    is_allowed = is_allowed_auto_type(canonical_type)
 
     if not is_allowed:
         # This is an Eigen type that's NOT on the allowlist

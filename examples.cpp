@@ -4,23 +4,43 @@
 using namespace Eigen;
 
 void example1_repeated_evaluation() {
-    // UNSAFE: auto captures expression template, multiplication runs repeatedly
+    // Deduces expression template type - multiplication runs repeatedly
     MatrixXd A = MatrixXd::Random(3, 3);
     MatrixXd B = MatrixXd::Random(3, 3);
 
-    auto C = A * B;  // UNSAFE - deduces expression template type, not MatrixXd
+    auto C = A * B;  // Deduces Eigen::Product<...>, not MatrixXd
 
     // Each access to C recomputes A*B
     std::cout << "C(0,0): " << C(0, 0) << std::endl;
     std::cout << "C(1,1): " << C(1, 1) << std::endl;
 }
 
-void example2_stale_references() {
-    // UNSAFE: Changing A affects what C represents
+void example1b_const_auto() {
+    // Deduces expression template type - const doesn't change deduced type
     MatrixXd A = MatrixXd::Random(3, 3);
     MatrixXd B = MatrixXd::Random(3, 3);
 
-    auto C = A * B;  // UNSAFE - stores references to A and B, not the result
+    const auto C = A * B;  // Deduces const Eigen::Product<...>
+
+    std::cout << "C(0,0): " << C(0, 0) << std::endl;
+}
+
+void example1c_const_auto_ref() {
+    // Deduces expression template type - reference doesn't change deduced type
+    MatrixXd A = MatrixXd::Random(3, 3);
+    MatrixXd B = MatrixXd::Random(3, 3);
+
+    const auto& C = A * B;  // Deduces const Eigen::Product<...> &
+
+    std::cout << "C(0,0): " << C(0, 0) << std::endl;
+}
+
+void example2_stale_references() {
+    // Deduces expression template type - stores references to operands
+    MatrixXd A = MatrixXd::Random(3, 3);
+    MatrixXd B = MatrixXd::Random(3, 3);
+
+    auto C = A * B;  // Deduces Eigen::Product<...> - stores references to A and B
 
     std::cout << "Before: " << C(0, 0) << std::endl;
     A(0, 0) = 999.0;  // Modifying A changes C's result!
@@ -28,83 +48,163 @@ void example2_stale_references() {
 }
 
 void example3_dangling_reference() {
-    // UNSAFE: Temporary deleted while referenced
+    // Deduces expression template type - temporary deleted while referenced
     MatrixXd A = MatrixXd::Random(3, 3);
     MatrixXd B = MatrixXd::Random(3, 3);
 
-    auto C = ((A + B).eval()).transpose();  // UNSAFE - dangling reference to temporary
+    auto C = ((A + B).eval()).transpose();  // Deduces Eigen::Transpose<...>
 
     // Accessing C is undefined behavior - segfault risk
     // std::cout << C(0, 0) << std::endl;
 }
 
-void example4_correct_with_eval() {
-    // SAFE: Using eval() on the complete expression materializes the result
+void example3b_const_auto_dangling() {
+    // Deduces expression template type
     MatrixXd A = MatrixXd::Random(3, 3);
     MatrixXd B = MatrixXd::Random(3, 3);
 
-    auto C = (A * B).eval();  // SAFE - eval() returns plain matrix, but uses auto
+    const auto C = ((A + B).eval()).transpose();  // Deduces const Eigen::Transpose<...>
+
+    // std::cout << C(0, 0) << std::endl;
+}
+
+void example3c_const_auto_ref_dangling() {
+    // Deduces expression template type
+    MatrixXd A = MatrixXd::Random(3, 3);
+    MatrixXd B = MatrixXd::Random(3, 3);
+
+    const auto& C = ((A + B).eval()).transpose();  // Deduces const Eigen::Transpose<...> &
+
+    // std::cout << C(0, 0) << std::endl;
+}
+
+void example4_correct_with_eval() {
+    // Deduces plain matrix type - eval() materializes the result
+    MatrixXd A = MatrixXd::Random(3, 3);
+    MatrixXd B = MatrixXd::Random(3, 3);
+
+    auto C = (A * B).eval();  // Deduces Eigen::Matrix<double, -1, -1>
+
+    std::cout << "C(0,0): " << C(0, 0) << std::endl;
+}
+
+void example4b_const_auto_eval() {
+    // Deduces plain matrix type
+    MatrixXd A = MatrixXd::Random(3, 3);
+    MatrixXd B = MatrixXd::Random(3, 3);
+
+    const auto C = (A * B).eval();  // Deduces const Eigen::Matrix<double, -1, -1>
+
+    std::cout << "C(0,0): " << C(0, 0) << std::endl;
+}
+
+void example4c_const_auto_ref_eval() {
+    // Deduces plain matrix type (but const& to temporary has lifetime issues)
+    MatrixXd A = MatrixXd::Random(3, 3);
+    MatrixXd B = MatrixXd::Random(3, 3);
+
+    const auto& C = (A * B).eval();  // Deduces const Eigen::Matrix<double, -1, -1> &
 
     std::cout << "C(0,0): " << C(0, 0) << std::endl;
 }
 
 void example5_correct_explicit_type() {
-    // SAFE: Explicit type declaration (recommended pattern)
+    // Explicit type declaration (recommended pattern) - no auto
     MatrixXd A = MatrixXd::Random(3, 3);
     MatrixXd B = MatrixXd::Random(3, 3);
 
-    MatrixXd C = A * B;  // SAFE - explicit type forces evaluation
+    MatrixXd C = A * B;  // Explicit MatrixXd - forces evaluation
 
     std::cout << "C(0,0): " << C(0, 0) << std::endl;
 }
 
 void example6_auto_with_plain_matrix() {
-    // SAFE: auto with already-plain matrix (technically safe, potential false positive)
+    // Deduces plain matrix type - copying from plain matrix
     MatrixXd A = MatrixXd::Random(3, 3);
 
-    auto B = A;  // SAFE - copying plain MatrixXd, no expression template involved
+    auto B = A;  // Deduces Eigen::Matrix<double, -1, -1>
+
+    std::cout << "B(0,0): " << B(0, 0) << std::endl;
+}
+
+void example6b_const_auto_plain() {
+    // Deduces plain matrix type
+    MatrixXd A = MatrixXd::Random(3, 3);
+
+    const auto B = A;  // Deduces const Eigen::Matrix<double, -1, -1>
+
+    std::cout << "B(0,0): " << B(0, 0) << std::endl;
+}
+
+void example6c_const_auto_ref_plain() {
+    // Deduces plain matrix type - reference to existing matrix
+    MatrixXd A = MatrixXd::Random(3, 3);
+
+    const auto& B = A;  // Deduces const Eigen::Matrix<double, -1, -1> &
 
     std::cout << "B(0,0): " << B(0, 0) << std::endl;
 }
 
 void example7_complex_expression() {
-    // UNSAFE: Complex expression template with multiple operations
+    // Deduces expression template type - complex nested expression
     MatrixXd A = MatrixXd::Random(3, 3);
     MatrixXd B = MatrixXd::Random(3, 3);
     MatrixXd D = MatrixXd::Random(3, 3);
 
-    auto C = A * B + D.transpose();  // UNSAFE - complex expression template
+    auto C = A * B + D.transpose();  // Deduces Eigen::CwiseBinaryOp<...>
+
+    std::cout << "C(0,0): " << C(0, 0) << std::endl;
+}
+
+void example7b_const_auto_complex() {
+    // Deduces expression template type
+    MatrixXd A = MatrixXd::Random(3, 3);
+    MatrixXd B = MatrixXd::Random(3, 3);
+    MatrixXd D = MatrixXd::Random(3, 3);
+
+    const auto C = A * B + D.transpose();  // Deduces const Eigen::CwiseBinaryOp<...>
+
+    std::cout << "C(0,0): " << C(0, 0) << std::endl;
+}
+
+void example7c_const_auto_ref_complex() {
+    // Deduces expression template type
+    MatrixXd A = MatrixXd::Random(3, 3);
+    MatrixXd B = MatrixXd::Random(3, 3);
+    MatrixXd D = MatrixXd::Random(3, 3);
+
+    const auto& C = A * B + D.transpose();  // Deduces const Eigen::CwiseBinaryOp<...> &
 
     std::cout << "C(0,0): " << C(0, 0) << std::endl;
 }
 
 void example8_vector_normalized() {
-    // UNSAFE: Automatic evaluation with potential dangling reference
+    // Deduces expression template type
     MatrixXd A = MatrixXd::Random(3, 3);
     VectorXd v = VectorXd::Random(3);
     VectorXd u = VectorXd::Random(3);
 
-    auto C = u + (A * v).normalized();  // UNSAFE - normalized() creates temporary
+    auto C = u + (A * v).normalized();  // Deduces Eigen::CwiseBinaryOp<...>
 
     std::cout << "C(0): " << C(0) << std::endl;
 }
 
 void example9_decltype_auto() {
-    // UNSAFE: decltype(auto) has same issues as auto
+    // Deduces expression template type - decltype(auto) behaves like auto here
     MatrixXd A = MatrixXd::Random(3, 3);
     MatrixXd B = MatrixXd::Random(3, 3);
 
-    decltype(auto) C = A * B;  // UNSAFE - deduces expression template like auto
+    decltype(auto) C = A * B;  // Deduces Eigen::Product<...>
 
     std::cout << "C(0,0): " << C(0, 0) << std::endl;
 }
 
 void example10_auto_ref() {
-    // UNSAFE: auto& or const auto& still captures expression template
+    // Deduces expression template type - auto& behaves same as const auto&
     MatrixXd A = MatrixXd::Random(3, 3);
     MatrixXd B = MatrixXd::Random(3, 3);
 
-    const auto& C = A * B;  // UNSAFE - reference to expression template
+    const auto& C = A * B;  // Deduces const Eigen::Product<...> &
 
     std::cout << "C(0,0): " << C(0, 0) << std::endl;
 }
@@ -115,11 +215,11 @@ VectorXd compute_result(const MatrixXd& A, const VectorXd& v) {
 }
 
 void example11_function_return_value() {
-    // SAFE: Function returns VectorXd by value, auto deduces plain type
+    // Deduces plain vector type - function returns VectorXd by value
     MatrixXd A = MatrixXd::Random(3, 3);
     VectorXd v = VectorXd::Random(3);
 
-    auto result = compute_result(A, v);  // SAFE - function returns plain VectorXd
+    auto result = compute_result(A, v);  // Deduces Eigen::Matrix<double, -1, 1>
 
     std::cout << "result(0): " << result(0) << std::endl;
 }
@@ -129,31 +229,31 @@ void example11_function_return_value() {
 // ============================================================================
 
 void example_multiline1_expression_template() {
-    // UNSAFE: Multi-line expression template
+    // Deduces expression template type - multi-line expression
     MatrixXd A = MatrixXd::Random(3, 3);
     MatrixXd B = MatrixXd::Random(3, 3);
     MatrixXd D = MatrixXd::Random(3, 3);
 
     auto C = A * B +
-             D.transpose();  // UNSAFE - expression template across lines
+             D.transpose();  // Deduces Eigen::CwiseBinaryOp<...>
 
     std::cout << "C(0,0): " << C(0, 0) << std::endl;
 }
 
 void example_multiline2_safe_eval() {
-    // SAFE: Multi-line with eval()
+    // Deduces plain matrix type - multi-line with eval()
     MatrixXd A = MatrixXd::Random(3, 3);
     MatrixXd B = MatrixXd::Random(3, 3);
     MatrixXd D = MatrixXd::Random(3, 3);
 
     auto C = (A * B +
-              D.transpose()).eval();  // SAFE - eval() returns plain matrix
+              D.transpose()).eval();  // Deduces Eigen::Matrix<double, -1, -1>
 
     std::cout << "C(0,0): " << C(0, 0) << std::endl;
 }
 
 void example_multiline3_complex_expression() {
-    // UNSAFE: Complex multi-line expression
+    // Deduces expression template type - complex multi-line expression
     MatrixXd A = MatrixXd::Random(3, 3);
     MatrixXd B = MatrixXd::Random(3, 3);
     MatrixXd D = MatrixXd::Random(3, 3);
@@ -161,13 +261,13 @@ void example_multiline3_complex_expression() {
 
     auto C = A * B +
              D.transpose() *
-             E;  // UNSAFE - complex expression template
+             E;  // Deduces Eigen::CwiseBinaryOp<...>
 
     std::cout << "C(0,0): " << C(0, 0) << std::endl;
 }
 
 void example_multiline4_parenthesized() {
-    // UNSAFE: Expression in parentheses across lines
+    // Deduces expression template type - parentheses don't materialize
     MatrixXd A = MatrixXd::Random(3, 3);
     MatrixXd B = MatrixXd::Random(3, 3);
     MatrixXd D = MatrixXd::Random(3, 3);
@@ -175,7 +275,7 @@ void example_multiline4_parenthesized() {
     auto C = (
         A * B +
         D.transpose()
-    );  // UNSAFE - parentheses don't materialize the result
+    );  // Deduces Eigen::CwiseBinaryOp<...>
 
     std::cout << "C(0,0): " << C(0, 0) << std::endl;
 }
@@ -185,20 +285,20 @@ void example_multiline4_parenthesized() {
 // ============================================================================
 
 void example12_auto_with_double() {
-    // SAFE: auto with double (no Eigen involved)
+    // Deduces double - no Eigen involved
     double a = 3.14;
     double b = 2.71;
 
-    auto c = a * b;  // SAFE - auto deduces double, not expression template
+    auto c = a * b;  // Deduces double
 
     std::cout << "c: " << c << std::endl;
 }
 
 void example13_auto_with_double_copy() {
-    // SAFE: auto copying a double
+    // Deduces double - no Eigen involved
     double a = 42.0;
 
-    auto b = a;  // SAFE - auto deduces double
+    auto b = a;  // Deduces double
 
     std::cout << "b: " << b << std::endl;
 }
@@ -208,31 +308,31 @@ double compute_double_result(double a, double b) {
 }
 
 void example14_auto_with_double_function() {
-    // SAFE: auto with function returning double
+    // Deduces double - no Eigen involved
     double a = 3.14;
     double b = 2.71;
 
-    auto result = compute_double_result(a, b);  // SAFE - auto deduces double
+    auto result = compute_double_result(a, b);  // Deduces double
 
     std::cout << "result: " << result << std::endl;
 }
 
 void example15_decltype_auto_with_double() {
-    // SAFE: decltype(auto) with double (no Eigen involved)
+    // Deduces double - no Eigen involved
     double a = 3.14;
     double b = 2.71;
 
-    decltype(auto) c = a * b;  // SAFE - deduces double
+    decltype(auto) c = a * b;  // Deduces double
 
     std::cout << "c: " << c << std::endl;
 }
 
 void example16_auto_ref_with_double() {
-    // SAFE: const auto& with double (no Eigen involved)
+    // Deduces double reference - no Eigen involved (but lifetime issue with temporary)
     double a = 3.14;
     double b = 2.71;
 
-    const auto& c = a * b;  // SAFE - reference to double (though unusual)
+    const auto& c = a * b;  // Deduces const double &
 
     std::cout << "c: " << c << std::endl;
 }
@@ -241,11 +341,23 @@ int main() {
     std::cout << "=== Example 1: Repeated Evaluation ===" << std::endl;
     example1_repeated_evaluation();
 
+    std::cout << "\n=== Example 1b: const auto ===" << std::endl;
+    example1b_const_auto();
+
+    std::cout << "\n=== Example 1c: const auto& ===" << std::endl;
+    example1c_const_auto_ref();
+
     std::cout << "\n=== Example 2: Stale References ===" << std::endl;
     example2_stale_references();
 
     std::cout << "\n=== Example 4: Correct with eval() ===" << std::endl;
     example4_correct_with_eval();
+
+    std::cout << "\n=== Example 4b: const auto with eval() ===" << std::endl;
+    example4b_const_auto_eval();
+
+    std::cout << "\n=== Example 4c: const auto& with eval() ===" << std::endl;
+    example4c_const_auto_ref_eval();
 
     std::cout << "\n=== Example 5: Correct Explicit Type ===" << std::endl;
     example5_correct_explicit_type();
@@ -253,8 +365,20 @@ int main() {
     std::cout << "\n=== Example 6: Auto with Plain Matrix ===" << std::endl;
     example6_auto_with_plain_matrix();
 
+    std::cout << "\n=== Example 6b: const auto with Plain Matrix ===" << std::endl;
+    example6b_const_auto_plain();
+
+    std::cout << "\n=== Example 6c: const auto& with Plain Matrix ===" << std::endl;
+    example6c_const_auto_ref_plain();
+
     std::cout << "\n=== Example 7: Complex Expression ===" << std::endl;
     example7_complex_expression();
+
+    std::cout << "\n=== Example 7b: const auto Complex ===" << std::endl;
+    example7b_const_auto_complex();
+
+    std::cout << "\n=== Example 7c: const auto& Complex ===" << std::endl;
+    example7c_const_auto_ref_complex();
 
     std::cout << "\n=== Example 8: Vector Normalized ===" << std::endl;
     example8_vector_normalized();
