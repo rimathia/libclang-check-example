@@ -34,9 +34,7 @@ def is_allowed_auto_type(canonical_type_name: str) -> bool:
         True if the type is a plain storage type (safe), False otherwise
     """
     # Remove leading 'const ' if present
-    type_to_check = canonical_type_name
-    if type_to_check.startswith("const "):
-        type_to_check = type_to_check[6:]
+    type_to_check = canonical_type_name.removeprefix("const ")
 
     # Remove trailing ' &' or ' *' if present
     type_to_check = type_to_check.rstrip("&* ")
@@ -75,9 +73,7 @@ def get_source_range(lines: list, start_line: int, end_line: int) -> str:
     """
     if 1 <= start_line <= len(lines) and 1 <= end_line <= len(lines):
         # Get all lines in the range
-        source_lines = [
-            lines[i - 1].rstrip() for i in range(start_line, end_line + 1)
-        ]
+        source_lines = [lines[i - 1].rstrip() for i in range(start_line, end_line + 1)]
         # Join with spaces to make it a single line for display
         return " ".join(line.strip() for line in source_lines if line.strip())
     return "?"
@@ -207,7 +203,9 @@ def get_compile_args(compdb, filename: str) -> list:
         raise ValueError(f"No compilation commands found for {filename} in database")
 
     if VERBOSE:
-        print(f"[DEBUG] Found {len(list(commands))} compilation command(s) for {filename}")
+        print(
+            f"[DEBUG] Found {len(list(commands))} compilation command(s) for {filename}"
+        )
 
     # Extract compiler flags from compilation database
     cmd_args = []
