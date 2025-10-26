@@ -4,3 +4,7 @@ This is a playground for getting a clang-tidy check for a c++ project to work. T
 # Python
 
 We use uv to manage python environments. One example how to run a script is changing the the `python_env` directory and executing `uv run test_libclang.py`.
+
+# Version control
+
+The repository is under version control, but only perform writing git operations if explicitly told to do so. Always check whether git diff shows nontrivial changes before embarking upon substantial edits.

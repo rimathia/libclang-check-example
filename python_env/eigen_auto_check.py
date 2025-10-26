@@ -22,13 +22,6 @@ import clang.cindex
 VERBOSE = False
 
 
-def is_eigen_type(type_name: str) -> bool:
-    """Check if a type appears to be Eigen-related."""
-    # Quick check for Eigen namespace or common indicators
-    eigen_indicators = ['Eigen::', 'Matrix', 'Vector', 'Array']
-    return any(indicator in type_name for indicator in eigen_indicators)
-
-
 def is_allowed_auto_type(canonical_type_name: str) -> bool:
     """
     Check if a canonical type is explicitly allowed to be used with auto.
@@ -42,44 +35,55 @@ def is_allowed_auto_type(canonical_type_name: str) -> bool:
     """
     # Remove leading 'const ' if present
     type_to_check = canonical_type_name
-    if type_to_check.startswith('const '):
+    if type_to_check.startswith("const "):
         type_to_check = type_to_check[6:]
 
     # Remove trailing ' &' or ' *' if present
-    type_to_check = type_to_check.rstrip('&* ')
+    type_to_check = type_to_check.rstrip("&* ")
 
     if VERBOSE:
-        print(f"[DEBUG] Checking allowlist for canonical type: '{canonical_type_name}' -> '{type_to_check}'")
+        print(
+            f"[DEBUG] Checking allowlist for canonical type: '{canonical_type_name}' -> '{type_to_check}'"
+        )
 
     # Allowlist: Only Eigen::Matrix and Eigen::Array are plain storage types
     # All other Eigen types (Product, CwiseBinaryOp, Transpose, etc.) are expression templates
 
-    if type_to_check.startswith('Eigen::Matrix<') or type_to_check.startswith('Eigen::Array<'):
+    if type_to_check.startswith("Eigen::Matrix<") or type_to_check.startswith(
+        "Eigen::Array<"
+    ):
         if VERBOSE:
-            print(f"[DEBUG] -> ALLOWED (plain Matrix/Array storage type)")
+            print("[DEBUG] -> ALLOWED (plain Matrix/Array storage type)")
         return True
 
     if VERBOSE:
-        print(f"[DEBUG] -> NOT ALLOWED (likely expression template)")
+        print("[DEBUG] -> NOT ALLOWED (likely expression template)")
     return False
 
 
-def get_source_range(filename: str, start_line: int, end_line: int) -> str:
-    """Get a range of source lines from a file."""
-    try:
-        with open(filename, 'r') as f:
-            lines = f.readlines()
-            if 1 <= start_line <= len(lines) and 1 <= end_line <= len(lines):
-                # Get all lines in the range
-                source_lines = [lines[i - 1].rstrip() for i in range(start_line, end_line + 1)]
-                # Join with spaces to make it a single line for display
-                return ' '.join(line.strip() for line in source_lines if line.strip())
-    except Exception:
-        pass
+def get_source_range(lines: list, start_line: int, end_line: int) -> str:
+    """
+    Get a range of source lines from pre-loaded file content.
+
+    Args:
+        lines: List of lines from the source file
+        start_line: Starting line number (1-indexed)
+        end_line: Ending line number (1-indexed)
+
+    Returns:
+        Joined string of the line range
+    """
+    if 1 <= start_line <= len(lines) and 1 <= end_line <= len(lines):
+        # Get all lines in the range
+        source_lines = [
+            lines[i - 1].rstrip() for i in range(start_line, end_line + 1)
+        ]
+        # Join with spaces to make it a single line for display
+        return " ".join(line.strip() for line in source_lines if line.strip())
     return "?"
 
 
-def analyze_var_decl(cursor, filename: str) -> list:
+def analyze_var_decl(cursor, filename: str, source_lines: list) -> list:
     """Analyze a variable declaration to see if it uses auto with Eigen types."""
     issues = []
 
@@ -106,11 +110,11 @@ def analyze_var_decl(cursor, filename: str) -> list:
 
     # Look for auto or decltype(auto) in the declaration
     for i, token in enumerate(tokens):
-        if token.spelling == 'auto':
+        if token.spelling == "auto":
             uses_auto = True
             # Check for decltype(auto)
-            if i > 0 and tokens[i-1].spelling == '(':
-                if i > 1 and tokens[i-2].spelling == 'decltype':
+            if i > 0 and tokens[i - 1].spelling == "(":
+                if i > 1 and tokens[i - 2].spelling == "decltype":
                     uses_decltype_auto = True
             break
 
@@ -126,10 +130,12 @@ def analyze_var_decl(cursor, filename: str) -> list:
     canonical_name = canonical_type.spelling
 
     if VERBOSE:
-        print(f"[DEBUG] Variable '{cursor.spelling}': type='{type_name}', canonical='{canonical_name}'")
+        print(
+            f"[DEBUG] Variable '{cursor.spelling}': type='{type_name}', canonical='{canonical_name}'"
+        )
 
-    # Only check Eigen types (check canonical to catch typedefs)
-    if not is_eigen_type(canonical_name):
+    # Only check Eigen types (canonical types always start with Eigen::)
+    if not canonical_name.startswith("Eigen::"):
         return issues
 
     # Check if the canonical type is on the allowlist
@@ -143,115 +149,118 @@ def analyze_var_decl(cursor, filename: str) -> list:
         auto_kind = "decltype(auto)" if uses_decltype_auto else "auto"
 
         # Get the complete source range (handles multi-line expressions)
-        source_text = get_source_range(filename, location.line, end_location.line)
+        source_text = get_source_range(source_lines, location.line, end_location.line)
 
-        issues.append({
-            'file': filename,
-            'line': location.line,
-            'column': location.column,
-            'variable': cursor.spelling,
-            'type': canonical_name,
-            'type_as_written': type_name,
-            'auto_kind': auto_kind,
-            'source': source_text,
-        })
+        issues.append(
+            {
+                "file": filename,
+                "line": location.line,
+                "column": location.column,
+                "variable": cursor.spelling,
+                "type": canonical_name,
+                "type_as_written": type_name,
+                "auto_kind": auto_kind,
+                "source": source_text,
+            }
+        )
 
     return issues
 
 
-def check_file(filename: str, build_dir: str = None) -> list:
+def load_compilation_database(build_dir: str):
+    """
+    Load compilation database from build directory.
+
+    Args:
+        build_dir: Directory containing compile_commands.json
+
+    Returns:
+        CompilationDatabase object
+    """
+    build_path = Path(build_dir).resolve()
+    compdb_path = build_path / "compile_commands.json"
+
+    if VERBOSE:
+        print(f"[DEBUG] Loading compile_commands.json from: {build_path}")
+        print(f"[DEBUG] compile_commands.json exists: {compdb_path.exists()}")
+
+    if not compdb_path.exists():
+        raise FileNotFoundError(f"compile_commands.json not found at {compdb_path}")
+
+    return clang.cindex.CompilationDatabase.fromDirectory(str(build_path))
+
+
+def get_compile_args(compdb, filename: str) -> list:
+    """
+    Get compilation arguments for a specific file from the compilation database.
+
+    Args:
+        compdb: CompilationDatabase object
+        filename: The source file to get compile commands for
+
+    Returns:
+        List of compiler arguments
+    """
+    commands = compdb.getCompileCommands(filename)
+
+    if not commands:
+        raise ValueError(f"No compilation commands found for {filename} in database")
+
+    if VERBOSE:
+        print(f"[DEBUG] Found {len(list(commands))} compilation command(s) for {filename}")
+
+    # Extract compiler flags from compilation database
+    cmd_args = []
+    for cmd in compdb.getCompileCommands(filename):
+        cmd_args.extend(cmd.arguments)
+
+    # Skip the compiler executable name and filter out problematic flags
+    filtered_args = []
+    skip_next = False
+    for arg in cmd_args[1:]:  # Skip compiler name
+        if skip_next:
+            skip_next = False
+            continue
+        # Skip output-related flags that libclang doesn't need
+        if arg in ["-o", "-c"]:
+            skip_next = True
+            continue
+        if arg.startswith("-o"):
+            continue
+        # Skip driver mode flags
+        if arg.startswith("--driver-mode"):
+            continue
+        # Skip architecture flags that might confuse libclang
+        if arg in ["-arch"]:
+            skip_next = True
+            continue
+        filtered_args.append(arg)
+
+    if VERBOSE:
+        print(f"[DEBUG] Filtered compile args: {' '.join(filtered_args)}")
+
+    return filtered_args
+
+
+def check_file(filename: str, compdb) -> list:
     """Check a single C++ file for auto/Eigen issues."""
     issues = []
+
+    # Read source file once for later use
+    with open(filename, "r", encoding="utf-8") as f:
+        source_lines = f.readlines()
 
     # Initialize libclang
     index = clang.cindex.Index.create()
 
-    # Default compile arguments
-    args = ['-std=c++20']
-
-    # Try to use compilation database if build directory is provided
-    if build_dir:
-        build_path = Path(build_dir).resolve()
-        compdb_path = build_path / 'compile_commands.json'
-
-        if VERBOSE:
-            print(f"[DEBUG] Looking for compile_commands.json in: {build_path}")
-            print(f"[DEBUG] compile_commands.json exists: {compdb_path.exists()}")
-
-        if compdb_path.exists():
-            try:
-                compdb = clang.cindex.CompilationDatabase.fromDirectory(str(build_path))
-                commands = compdb.getCompileCommands(filename)
-
-                if commands:
-                    if VERBOSE:
-                        print(f"[DEBUG] Found {len(list(commands))} compilation command(s) for {filename}")
-                    # Extract compiler flags from compilation database
-                    cmd_args = []
-                    for cmd in compdb.getCompileCommands(filename):
-                        cmd_args.extend(cmd.arguments)
-
-                    # Skip the compiler executable name and filter out problematic flags
-                    if cmd_args:
-                        filtered_args = []
-                        skip_next = False
-                        for arg in cmd_args[1:]:  # Skip compiler name
-                            if skip_next:
-                                skip_next = False
-                                continue
-                            # Skip output-related flags that libclang doesn't need
-                            if arg in ['-o', '-c']:
-                                skip_next = True
-                                continue
-                            if arg.startswith('-o'):
-                                continue
-                            # Skip driver mode flags
-                            if arg.startswith('--driver-mode'):
-                                continue
-                            # Skip architecture flags that might confuse libclang
-                            if arg in ['-arch']:
-                                skip_next = True
-                                continue
-                            filtered_args.append(arg)
-
-                        args = filtered_args
-
-                    if VERBOSE:
-                        print(f"[DEBUG] ✓ Using compilation database from {build_path}")
-                        print(f"[DEBUG] Filtered compile args: {' '.join(args)}")
-                else:
-                    if VERBOSE:
-                        print(f"[DEBUG] ✗ No compilation commands found for {filename} in database")
-                        print(f"[DEBUG] Using default args: {args}")
-            except Exception as e:
-                if VERBOSE:
-                    print(f"[DEBUG] ✗ Error loading compilation database: {e}")
-                    print(f"[DEBUG] Using default args: {args}")
-        else:
-            if VERBOSE:
-                print(f"[DEBUG] ✗ compile_commands.json not found at {compdb_path}")
-                print(f"[DEBUG] Using default args: {args}")
-    else:
-        if VERBOSE:
-            print(f"[DEBUG] No build directory specified")
-            print(f"[DEBUG] Using default args: {args}")
+    # Get compilation arguments for this file
+    args = get_compile_args(compdb, filename)
 
     # Parse the file
     if VERBOSE:
         print(f"[DEBUG] Parsing {filename}...")
-    try:
-        translation_unit = index.parse(filename, args=args)
-    except Exception as e:
-        if VERBOSE:
-            print(f"[DEBUG] ✗ Error parsing {filename}: {e}", file=sys.stderr)
-            print(f"[DEBUG] Trying with simplified args...", file=sys.stderr)
-        # Try again with just basic args
-        try:
-            translation_unit = index.parse(filename, args=['-std=c++20', '-I/opt/homebrew/include/eigen3'])
-        except Exception as e2:
-            if VERBOSE:
-                print(f"[DEBUG] ✗ Simplified parse also failed: {e2}", file=sys.stderr)
-            return issues
+
+    translation_unit = index.parse(filename, args=args)
 
     # Check for parse errors
     if VERBOSE:
@@ -272,14 +281,17 @@ def check_file(filename: str, build_dir: str = None) -> list:
 
     if VERBOSE:
         if has_errors:
-            print("[DEBUG] ✗ File has parse errors, results may be incomplete", file=sys.stderr)
+            print(
+                "[DEBUG] ✗ File has parse errors, results may be incomplete",
+                file=sys.stderr,
+            )
         else:
             print("[DEBUG] ✓ Parse successful")
 
     # Walk the AST
     def visit_node(cursor):
         # Analyze this node
-        issues.extend(analyze_var_decl(cursor, filename))
+        issues.extend(analyze_var_decl(cursor, filename, source_lines))
 
         # Recurse into children
         for child in cursor.get_children():
@@ -296,14 +308,17 @@ def main():
     parser = argparse.ArgumentParser(
         description="Check for dangerous auto usage with Eigen expression templates",
         epilog="Examples:\n"
-               "  uv run eigen_auto_check.py ../examples.cpp\n"
-               "  uv run eigen_auto_check.py ../examples.cpp ../build\n"
-               "  uv run eigen_auto_check.py ../examples.cpp ../build --verbose",
-        formatter_class=argparse.RawDescriptionHelpFormatter
+        "  uv run eigen_auto_check.py ../examples.cpp ../build\n"
+        "  uv run eigen_auto_check.py ../examples.cpp ../build --verbose",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
     )
-    parser.add_argument('source_file', help='C++ source file to check')
-    parser.add_argument('build_dir', nargs='?', help='Build directory containing compile_commands.json')
-    parser.add_argument('--verbose', '-v', action='store_true', help='Enable verbose debug output')
+    parser.add_argument("source_file", help="C++ source file to check")
+    parser.add_argument(
+        "build_dir", help="Build directory containing compile_commands.json"
+    )
+    parser.add_argument(
+        "--verbose", "-v", action="store_true", help="Enable verbose debug output"
+    )
 
     args = parser.parse_args()
 
@@ -320,7 +335,11 @@ def main():
     if not VERBOSE:
         print(f"Checking {source_path}...")
 
-    issues = check_file(str(source_path), build_dir)
+    # Load compilation database once
+    compdb = load_compilation_database(build_dir)
+
+    # Check the file
+    issues = check_file(str(source_path), compdb)
 
     if not issues:
         print(f"✓ No issues found")
@@ -329,8 +348,10 @@ def main():
     print(f"Found {len(issues)} issue(s):\n")
 
     for issue in issues:
-        print(f"{issue['file']}:{issue['line']}:{issue['column']}: error: "
-              f"'{issue['variable']}' uses {issue['auto_kind']} with Eigen expression template")
+        print(
+            f"{issue['file']}:{issue['line']}:{issue['column']}: error: "
+            f"'{issue['variable']}' uses {issue['auto_kind']} with Eigen expression template"
+        )
         print(f"  Type: {issue['type']}")
         print(f"  Source: {issue['source']}")
         print()
@@ -338,5 +359,5 @@ def main():
     return 1
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     sys.exit(main())
